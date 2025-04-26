@@ -24,7 +24,7 @@ const Navbar = () => {
               <span className='text-lg'>Home</span>
             </Link>
             <Link to="/pyq" className="flex items-center space-x-1 hover:text-gray-500 transition">
-              <FileText className="h-5 w-5" />
+              <FileText className="h-5 w-5"/>
               <span className='text-lg'>PYQs</span>
             </Link>
             <Link to="/resources" className="flex items-center space-x-1 hover:text-gray-500 transition">
@@ -34,6 +34,10 @@ const Navbar = () => {
             <Link to="/auth" className="flex items-center space-x-1 hover:text-gray-500 transition">
               <User className="h-5 w-5" />
               <span className='text-lg'>Login</span>
+            </Link>
+            <Link to="/AdminPanel" className="flex items-center space-x-1 hover:text-gray-500 transition">
+              <User className="h-5 w-5" />
+              <span className='text-lg'>Admin</span>
             </Link>
           </div>
 

@@ -7,6 +7,9 @@ import Home from './Pages/Home';
 import PYQ from './Pages/PYQ';
 import Resources from './Pages/Resources';
 import Semester from './Pages/Semester';
+import AdminPanel from './Pages/AdminPanel';
+import StudentPyqDownload from './Pages/StudentPyqDownload';
+import AdminPyqUpload from './Pages/AdminPyqUpload';
 
 
 function App() {
@@ -23,6 +26,10 @@ function App() {
             <Route path="/semester/:id" element={<Semester/>}/>
             <Route path="/resources" element={<Resources />} />
             <Route path="/auth" element={<Auth/>} />
+            <Route path="/AdminPanel" element={<AdminPanel/>} />
+            <Route path="/StudentPyqDownload" element={<StudentPyqDownload/>} />
+            {/* <Route path="/AdminPyqDownload" element={<AdminPyqDownload />} /> */}
+            <Route path="/AdminPyqDownload" element={<AdminPyqUpload />}></Route>
           </Routes>
         </main>
         <Footer/>

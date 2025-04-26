@@ -59,6 +59,8 @@ const PYQ = () => {
               {/* <p>{paper.downloads} downloads</p> */}
             </div>
             <button onClick={()=> navigate(`/semester/${paper.id}`)} className=" flex items-center justify-center px-4 py-2 bg-gray-100 text-gray-700 rounded-lg hover:bg-gray-700 hover:text-gray-100">
+            {/* <button onClick={()=> navigate(`/StudentPyqDownload/${paper.id}`)} className=" flex items-center justify-center px-4 py-2 bg-gray-100 text-gray-700 rounded-lg hover:bg-gray-700 hover:text-gray-100"> */}
+
               Click Here
             </button>
           </div>
@@ -66,6 +68,6 @@ const PYQ = () => {
       </div>
     </div>
   );
-};
+};0
 
 export default PYQ;

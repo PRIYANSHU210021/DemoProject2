@@ -250,7 +250,7 @@ const Subjects = [
 
 const Semester = () => {
   const { id } = useParams();
-  const semId = parseInt(id, 10); // Convert string ID to number
+  const semId = parseInt(id, 10);
 
   return (
     <div className="max-w-7xl mx-auto md:px-16 px-4 py-8">

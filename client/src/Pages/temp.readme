@@ -1,0 +1,837 @@
+// File Structure
+/*
+/pyq-backend
+  /config
+    - db.js
+    - cloudinary.js
+  /controllers
+    - authController.js
+    - pyqController.js
+  /middleware
+    - auth.js
+    - upload.js
+    - validation.js
+  /models
+    - User.js
+    - PYQ.js
+    - Log.js
+  /routes
+    - authRoutes.js
+    - pyqRoutes.js
+  /utils
+    - errorHandler.js
+  - server.js
+  - .env
+  - package.json
+*/
+
+// server.js - Entry point
+const express = require('express');
+const mongoose = require('mongoose');
+const cors = require('cors');
+const rateLimit = require('express-rate-limit');
+const swaggerUi = require('swagger-ui-express');
+const swaggerDocument = require('./swagger.json');
+const errorHandler = require('./utils/errorHandler');
+
+// Import routes
+const authRoutes = require('./routes/authRoutes');
+const pyqRoutes = require('./routes/pyqRoutes');
+
+// Load environment variables
+require('dotenv').config();
+
+// Initialize express app
+const app = express();
+
+// Connect to MongoDB
+require('./config/db')();
+
+// Middleware
+app.use(cors());
+app.use(express.json());
+app.use(express.urlencoded({ extended: true }));
+
+// Rate limiting
+const limiter = rateLimit({
+  windowMs: 15 * 60 * 1000, // 15 minutes
+  max: 100, // limit each IP to 100 requests per windowMs
+  message: 'Too many requests from this IP, please try again later'
+});
+app.use(limiter);
+
+// API Documentation
+app.use('/api-docs', swaggerUi.serve, swaggerUi.setup(swaggerDocument));
+
+// Routes
+app.use('/api/auth', authRoutes);
+app.use('/api/pyq', pyqRoutes);
+
+// Error handling middleware
+app.use(errorHandler);
+
+// Start server
+const PORT = process.env.PORT || 5000;
+app.listen(PORT, () => {
+  console.log(`Server running on port ${PORT}`);
+});
+
+// config/db.js
+const mongoose = require('mongoose');
+
+const connectDB = async () => {
+  try {
+    await mongoose.connect(process.env.MONGO_URI, {
+      useNewUrlParser: true,
+      useUnifiedTopology: true
+    });
+    console.log('MongoDB connected');
+  } catch (error) {
+    console.error('MongoDB connection error:', error.message);
+    process.exit(1);
+  }
+};
+
+module.exports = connectDB;
+
+// config/cloudinary.js
+const cloudinary = require('cloudinary').v2;
+
+cloudinary.config({
+  cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
+  api_key: process.env.CLOUDINARY_API_KEY,
+  api_secret: process.env.CLOUDINARY_API_SECRET
+});
+
+module.exports = cloudinary;
+
+// models/User.js
+const mongoose = require('mongoose');
+const bcrypt = require('bcryptjs');
+const jwt = require('jsonwebtoken');
+
+const UserSchema = new mongoose.Schema({
+  name: {
+    type: String,
+    required: [true, 'Please provide a name'],
+    trim: true
+  },
+  email: {
+    type: String,
+    required: [true, 'Please provide an email'],
+    unique: true,
+    match: [
+      /^\w+([\.-]?\w+)*@\w+([\.-]?\w+)*(\.\w{2,3})+$/,
+      'Please provide a valid email'
+    ]
+  },
+  password: {
+    type: String,
+    required: [true, 'Please provide a password'],
+    minlength: 6,
+    select: false
+  },
+  role: {
+    type: String,
+    enum: ['admin', 'student', 'faculty'],
+    default: 'student'
+  },
+  createdAt: {
+    type: Date,
+    default: Date.now
+  }
+});
+
+// Encrypt password before saving
+UserSchema.pre('save', async function(next) {
+  if (!this.isModified('password')) {
+    next();
+  }
+  const salt = await bcrypt.genSalt(10);
+  this.password = await bcrypt.hash(this.password, salt);
+});
+
+// Sign JWT and return
+UserSchema.methods.getSignedJwtToken = function() {
+  return jwt.sign({ id: this._id, role: this.role }, process.env.JWT_SECRET, {
+    expiresIn: process.env.JWT_EXPIRE
+  });
+};
+
+// Match user entered password to hashed password in database
+UserSchema.methods.matchPassword = async function(enteredPassword) {
+  return await bcrypt.compare(enteredPassword, this.password);
+};
+
+module.exports = mongoose.model('User', UserSchema);
+
+// models/PYQ.js
+const mongoose = require('mongoose');
+
+const PYQSchema = new mongoose.Schema({
+  title: {
+    type: String,
+    required: [true, 'Please provide a title'],
+    trim: true
+  },
+  branch: {
+    type: String,
+    required: [true, 'Please provide a branch'],
+    enum: ['CSE', 'ECE', 'ME', 'CE', 'EE', 'IT', 'Other']
+  },
+  semester: {
+    type: Number,
+    required: [true, 'Please provide a semester'],
+    min: 1,
+    max: 8
+  },
+  subject: {
+    name: {
+      type: String,
+      required: [true, 'Please provide a subject name'],
+      trim: true
+    },
+    code: {
+      type: String,
+      required: [true, 'Please provide a subject code'],
+      trim: true
+    }
+  },
+  year: {
+    type: Number,
+    required: [true, 'Please provide a year'],
+    min: 1950,
+    max: new Date().getFullYear()
+  },
+  fileUrl: {
+    type: String,
+    required: [true, 'File URL is required']
+  },
+  publicId: {
+    type: String,
+    required: [true, 'Public ID is required']
+  },
+  uploadedBy: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'User',
+    required: true
+  },
+  createdAt: {
+    type: Date,
+    default: Date.now
+  }
+});
+
+// Index for search functionality
+PYQSchema.index({ 
+  title: 'text', 
+  'subject.name': 'text', 
+  'subject.code': 'text' 
+});
+
+module.exports = mongoose.model('PYQ', PYQSchema);
+
+// models/Log.js
+const mongoose = require('mongoose');
+
+const LogSchema = new mongoose.Schema({
+  action: {
+    type: String,
+    enum: ['upload', 'update', 'delete', 'download'],
+    required: true
+  },
+  resourceId: {
+    type: mongoose.Schema.Types.ObjectId,
+    required: true
+  },
+  resourceType: {
+    type: String,
+    default: 'PYQ'
+  },
+  user: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'User',
+    required: true
+  },
+  details: {
+    type: Object
+  },
+  timestamp: {
+    type: Date,
+    default: Date.now
+  }
+});
+
+module.exports = mongoose.model('Log', LogSchema);
+
+// middleware/auth.js
+const jwt = require('jsonwebtoken');
+const User = require('../models/User');
+
+// Protect routes
+exports.protect = async (req, res, next) => {
+  let token;
+  
+  if (
+    req.headers.authorization &&
+    req.headers.authorization.startsWith('Bearer')
+  ) {
+    token = req.headers.authorization.split(' ')[1];
+  }
+
+  if (!token) {
+    return res.status(401).json({
+      success: false,
+      message: 'Not authorized to access this route'
+    });
+  }
+
+  try {
+    // Verify token
+    const decoded = jwt.verify(token, process.env.JWT_SECRET);
+    
+    req.user = await User.findById(decoded.id);
+    
+    next();
+  } catch (error) {
+    return res.status(401).json({
+      success: false,
+      message: 'Not authorized to access this route'
+    });
+  }
+};
+
+// Grant access to specific roles
+exports.authorize = (...roles) => {
+  return (req, res, next) => {
+    if (!roles.includes(req.user.role)) {
+      return res.status(403).json({
+        success: false,
+        message: `User role ${req.user.role} is not authorized to access this route`
+      });
+    }
+    next();
+  };
+};
+
+// middleware/upload.js
+const multer = require('multer');
+const path = require('path');
+const cloudinary = require('../config/cloudinary');
+const { CloudinaryStorage } = require('multer-storage-cloudinary');
+
+// Configure Cloudinary storage
+const storage = new CloudinaryStorage({
+  cloudinary: cloudinary,
+  params: {
+    folder: 'pyq_papers',
+    resource_type: 'raw',
+    allowed_formats: ['pdf']
+  }
+});
+
+// Check file type
+const fileFilter = (req, file, cb) => {
+  // Allow only PDF files
+  if (file.mimetype === 'application/pdf') {
+    cb(null, true);
+  } else {
+    cb(new Error('Only PDF files are allowed'), false);
+  }
+};
+
+const upload = multer({
+  storage: storage,
+  limits: { fileSize: 10 * 1024 * 1024 }, // 10MB limit
+  fileFilter: fileFilter
+});
+
+module.exports = upload;
+
+// middleware/validation.js
+const { body, validationResult } = require('express-validator');
+
+// Validate registration input
+exports.validateRegisterInput = [
+  body('name', 'Name is required').notEmpty(),
+  body('email', 'Please include a valid email').isEmail(),
+  body('password', 'Please enter a password with 6 or more characters').isLength({ min: 6 }),
+  body('role').optional().isIn(['admin', 'student', 'faculty']),
+  (req, res, next) => {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+      return res.status(400).json({ success: false, errors: errors.array() });
+    }
+    next();
+  }
+];
+
+// Validate login input
+exports.validateLoginInput = [
+  body('email', 'Please include a valid email').isEmail(),
+  body('password', 'Password is required').exists(),
+  (req, res, next) => {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+      return res.status(400).json({ success: false, errors: errors.array() });
+    }
+    next();
+  }
+];
+
+// Validate PYQ upload input
+exports.validatePYQInput = [
+  body('title', 'Title is required').notEmpty(),
+  body('branch', 'Branch is required').notEmpty().isIn(['CSE', 'ECE', 'ME', 'CE', 'EE', 'IT', 'Other']),
+  body('semester', 'Semester must be between 1 and 8').isInt({ min: 1, max: 8 }),
+  body('subject.name', 'Subject name is required').notEmpty(),
+  body('subject.code', 'Subject code is required').notEmpty(),
+  body('year', 'Year is required').isInt({ min: 1950, max: new Date().getFullYear() }),
+  (req, res, next) => {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+      return res.status(400).json({ success: false, errors: errors.array() });
+    }
+    next();
+  }
+];
+
+// controllers/authController.js
+const User = require('../models/User');
+const Log = require('../models/Log');
+
+// @desc    Register user
+// @route   POST /api/auth/register
+// @access  Public
+exports.register = async (req, res) => {
+  try {
+    const { name, email, password, role } = req.body;
+    
+    // Check if user already exists
+    let user = await User.findOne({ email });
+    
+    if (user) {
+      return res.status(400).json({
+        success: false,
+        message: 'User already exists'
+      });
+    }
+    
+    // Create user
+    user = await User.create({
+      name,
+      email,
+      password,
+      role: role || 'student'
+    });
+    
+    // Create token
+    const token = user.getSignedJwtToken();
+    
+    res.status(201).json({
+      success: true,
+      token
+    });
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      message: 'Server error'
+    });
+  }
+};
+
+// @desc    Login user
+// @route   POST /api/auth/login
+// @access  Public
+exports.login = async (req, res) => {
+  try {
+    const { email, password } = req.body;
+    
+    // Check for user
+    const user = await User.findOne({ email }).select('+password');
+    
+    if (!user) {
+      return res.status(401).json({
+        success: false,
+        message: 'Invalid credentials'
+      });
+    }
+    
+    // Check if password matches
+    const isMatch = await user.matchPassword(password);
+    
+    if (!isMatch) {
+      return res.status(401).json({
+        success: false,
+        message: 'Invalid credentials'
+      });
+    }
+    
+    // Create token
+    const token = user.getSignedJwtToken();
+    
+    res.status(200).json({
+      success: true,
+      token,
+      user: {
+        id: user._id,
+        name: user.name,
+        email: user.email,
+        role: user.role
+      }
+    });
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      message: 'Server error'
+    });
+  }
+};
+
+// @desc    Get current logged in user
+// @route   GET /api/auth/me
+// @access  Private
+exports.getMe = async (req, res) => {
+  try {
+    const user = await User.findById(req.user.id);
+    
+    res.status(200).json({
+      success: true,
+      data: user
+    });
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      message: 'Server error'
+    });
+  }
+};
+
+// controllers/pyqController.js
+const PYQ = require('../models/PYQ');
+const Log = require('../models/Log');
+const cloudinary = require('../config/cloudinary');
+
+// @desc    Upload PYQ
+// @route   POST /api/pyq/upload
+// @access  Private (Admin, Faculty)
+exports.uploadPYQ = async (req, res) => {
+  try {
+    if (!req.file) {
+      return res.status(400).json({
+        success: false,
+        message: 'Please upload a file'
+      });
+    }
+
+    const { title, branch, semester, subject, year } = req.body;
+    
+    // Create PYQ
+    const pyq = await PYQ.create({
+      title,
+      branch,
+      semester,
+      subject: {
+        name: subject.name,
+        code: subject.code
+      },
+      year,
+      fileUrl: req.file.path,
+      publicId: req.file.filename,
+      uploadedBy: req.user.id
+    });
+    
+    // Log the action
+    await Log.create({
+      action: 'upload',
+      resourceId: pyq._id,
+      user: req.user.id,
+      details: { fileName: req.file.originalname }
+    });
+    
+    res.status(201).json({
+      success: true,
+      data: pyq
+    });
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      message: 'Server error',
+      error: error.message
+    });
+  }
+};
+
+// @desc    Get all PYQs
+// @route   GET /api/pyq/list
+// @access  Private
+exports.getPYQs = async (req, res) => {
+  try {
+    const { branch, semester, year, subject } = req.query;
+    
+    // Build query
+    const query = {};
+    
+    if (branch) query.branch = branch;
+    if (semester) query.semester = semester;
+    if (year) query.year = year;
+    if (subject) query['subject.code'] = subject;
+    
+    const pyqs = await PYQ.find(query)
+      .populate('uploadedBy', 'name')
+      .sort('-createdAt');
+    
+    res.status(200).json({
+      success: true,
+      count: pyqs.length,
+      data: pyqs
+    });
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      message: 'Server error'
+    });
+  }
+};
+
+// @desc    Search PYQs by keyword
+// @route   GET /api/pyq/search
+// @access  Private
+exports.searchPYQs = async (req, res) => {
+  try {
+    const { keyword } = req.query;
+    
+    if (!keyword) {
+      return res.status(400).json({
+        success: false,
+        message: 'Please provide a search keyword'
+      });
+    }
+    
+    const pyqs = await PYQ.find({ $text: { $search: keyword } })
+      .populate('uploadedBy', 'name')
+      .sort('-createdAt');
+    
+    res.status(200).json({
+      success: true,
+      count: pyqs.length,
+      data: pyqs
+    });
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      message: 'Server error'
+    });
+  }
+};
+
+// @desc    Get single PYQ
+// @route   GET /api/pyq/:id
+// @access  Private
+exports.getPYQ = async (req, res) => {
+  try {
+    const pyq = await PYQ.findById(req.params.id).populate('uploadedBy', 'name');
+    
+    if (!pyq) {
+      return res.status(404).json({
+        success: false,
+        message: 'PYQ not found'
+      });
+    }
+    
+    // Log download action
+    await Log.create({
+      action: 'download',
+      resourceId: pyq._id,
+      user: req.user.id
+    });
+    
+    res.status(200).json({
+      success: true,
+      data: pyq
+    });
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      message: 'Server error'
+    });
+  }
+};
+
+// @desc    Update PYQ
+// @route   PUT /api/pyq/:id
+// @access  Private (Admin only)
+exports.updatePYQ = async (req, res) => {
+  try {
+    let pyq = await PYQ.findById(req.params.id);
+    
+    if (!pyq) {
+      return res.status(404).json({
+        success: false,
+        message: 'PYQ not found'
+      });
+    }
+    
+    // Update PYQ
+    pyq = await PYQ.findByIdAndUpdate(req.params.id, req.body, {
+      new: true,
+      runValidators: true
+    });
+    
+    // Log update action
+    await Log.create({
+      action: 'update',
+      resourceId: pyq._id,
+      user: req.user.id,
+      details: req.body
+    });
+    
+    res.status(200).json({
+      success: true,
+      data: pyq
+    });
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      message: 'Server error'
+    });
+  }
+};
+
+// @desc    Delete PYQ
+// @route   DELETE /api/pyq/:id
+// @access  Private (Admin only)
+exports.deletePYQ = async (req, res) => {
+  try {
+    const pyq = await PYQ.findById(req.params.id);
+    
+    if (!pyq) {
+      return res.status(404).json({
+        success: false,
+        message: 'PYQ not found'
+      });
+    }
+    
+    // Delete file from cloudinary
+    await cloudinary.uploader.destroy(pyq.publicId);
+    
+    // Delete PYQ from database
+    await pyq.remove();
+    
+    // Log delete action
+    await Log.create({
+      action: 'delete',
+      resourceId: pyq._id,
+      user: req.user.id
+    });
+    
+    res.status(200).json({
+      success: true,
+      message: 'PYQ deleted successfully'
+    });
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      message: 'Server error'
+    });
+  }
+};
+
+// routes/authRoutes.js
+const express = require('express');
+const { register, login, getMe } = require('../controllers/authController');
+const { validateRegisterInput, validateLoginInput } = require('../middleware/validation');
+const { protect } = require('../middleware/auth');
+
+const router = express.Router();
+
+router.post('/register', validateRegisterInput, register);
+router.post('/login', validateLoginInput, login);
+router.get('/me', protect, getMe);
+
+module.exports = router;
+
+// routes/pyqRoutes.js
+const express = require('express');
+const {
+  uploadPYQ,
+  getPYQs,
+  searchPYQs,
+  getPYQ,
+  updatePYQ,
+  deletePYQ
+} = require('../controllers/pyqController');
+const { protect, authorize } = require('../middleware/auth');
+const upload = require('../middleware/upload');
+const { validatePYQInput } = require('../middleware/validation');
+
+const router = express.Router();
+
+router.post(
+  '/upload',
+  protect,
+  authorize('admin', 'faculty'),
+  upload.single('file'),
+  validatePYQInput,
+  uploadPYQ
+);
+
+router.get('/list', protect, getPYQs);
+router.get('/search', protect, searchPYQs);
+router.get('/:id', protect, getPYQ);
+router.put('/:id', protect, authorize('admin'), validatePYQInput, updatePYQ);
+router.delete('/:id', protect, authorize('admin'), deletePYQ);
+
+module.exports = router;
+
+// utils/errorHandler.js
+const errorHandler = (err, req, res, next) => {
+  console.error(err.stack);
+  
+  res.status(err.statusCode || 500).json({
+    success: false,
+    error: err.message || 'Server Error'
+  });
+};
+
+module.exports = errorHandler;
+
+// .env (example)
+/*
+PORT=5000
+MONGO_URI=mongodb+srv://username:password@cluster.mongodb.net/pyq_database
+JWT_SECRET=your_jwt_secret_key
+JWT_EXPIRE=30d
+CLOUDINARY_CLOUD_NAME=your_cloudinary_cloud_name
+CLOUDINARY_API_KEY=your_cloudinary_api_key
+CLOUDINARY_API_SECRET=your_cloudinary_api_secret
+*/
+
+// package.json
+{
+  "name": "pyq-management-system",
+  "version": "1.0.0",
+  "description": "Backend for PYQ Management System",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "nodemon server.js"
+  },
+  "dependencies": {
+    "bcryptjs": "^2.4.3",
+    "cloudinary": "^1.33.0",
+    "cors": "^2.8.5",
+    "dotenv": "^16.0.3",
+    "express": "^4.18.2",
+    "express-rate-limit": "^6.7.0",
+    "express-validator": "^6.14.3",
+    "jsonwebtoken": "^9.0.0",
+    "mongoose": "^6.9.0",
+    "multer": "^1.4.5-lts.1",
+    "multer-storage-cloudinary": "^4.0.0",
+    "swagger-ui-express": "^4.6.0"
+  },
+  "devDependencies": {
+    "nodemon": "^2.0.20"
+  }
+}
